@@ -5,7 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:sdp_transform/sdp_transform.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
-import 'package:web_socket_channel/web_socket_channel.dart';
+
 
 void main() {
   runApp(MyApp());
@@ -20,14 +20,85 @@ class MyApp extends StatelessWidget {
         primarySwatch: Colors.blueGrey,
         visualDensity: VisualDensity.adaptivePlatformDensity,
       ),
-      home: MyHomePage(),
+      home: BlindVSVolunteer(),
     );
   }
 }
+bool isBlind = false;
+late var  id;
+
+
+class BlindVSVolunteer extends StatelessWidget{
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Column(
+
+        children: [
+          Expanded(
+            child: ElevatedButton(
+              onPressed: () {
+                isBlind=true;
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => MyHomePage(),
+                  ),);
+              },
+              style: ElevatedButton.styleFrom(
+                  primary: Colors.blue,
+                  minimumSize: Size.fromWidth(double.infinity),
+              ),
+              child: Text(
+                  'Blind',
+                  style: TextStyle(
+                    fontWeight:FontWeight.bold,
+                    fontSize: 32.0,
+                    color: Colors.white,
+
+                  ),
+                ),
+              ),
+            ),
+          Expanded(
+            child: ElevatedButton(
+
+              onPressed: () {
+                isBlind=false;
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => MyHomePage(),
+                  ),);
+              },
+              style: ElevatedButton.styleFrom(
+                  primary: Colors.purple,
+                  minimumSize: Size.fromWidth(double.infinity),
+              ),
+              child: Text(
+                  'Volunteer',
+                  style: TextStyle(
+                    fontWeight:FontWeight.bold,
+                    fontSize: 32.0,
+                    color: Colors.white,
+
+                  ),
+                ),
+              ),
+            ),
+
+        ],
+
+      ),
+    );
+
+  }
+
+}
 
 class MyHomePage extends StatefulWidget {
-  final WebSocketChannel channel;
-  MyHomePage(this.channel);
+
 
 
   @override
@@ -50,15 +121,19 @@ class _MyHomePageState extends State<MyHomePage> {
     _localRenderer.dispose();
     _remoteRenderer.dispose();
     sdpController.dispose();
+    socket!.disconnect();
+
     super.dispose();
   }
 
   @override
   void initState() {
     initRenderer();
+    connect();
     _createPeerConnection().then((pc) {
       _peerConnection = pc;
     });
+
     // _getUserMedia();
     super.initState();
   }
@@ -66,6 +141,22 @@ class _MyHomePageState extends State<MyHomePage> {
   initRenderer() async {
     await _localRenderer.initialize();
     await _remoteRenderer.initialize();
+  }
+
+  void connect() {
+    socket = IO.io("",<String, dynamic>{
+      "transports":["websocket"],
+      "autoConnect":false,
+    });
+    socket!.connect();
+    socket!.onConnect((_) {
+      print("connected to server");
+    });
+    print(socket!.connected);
+     id = socket!.id;
+    print(id);
+    socket!.emit('ID to server','$id'+' '+'$isBlind');
+
   }
 
   _createPeerConnection() async {
@@ -90,15 +181,24 @@ class _MyHomePageState extends State<MyHomePage> {
 
     pc.addStream(_localStream!);
 
+    int counter = 0;
     pc.onIceCandidate = (e) {
       if (e.candidate != null) {
-        print(json.encode({
+        var temp=json.encode({
           'candidate': e.candidate.toString(),
           'sdpMid': e.sdpMid.toString(),
           'sdpMlineIndex': e.sdpMlineIndex,
-        }));
+
+        });
+        print(temp);
+        if(counter==0) {
+          socket!.emit('get ICE', '$temp' + ' ' + '$id' + ' ' + '$isBlind');
+        }
+        counter ++;
+
       }
     };
+
 
     pc.onIceConnectionState = (e) {
       print(e);
@@ -133,6 +233,7 @@ class _MyHomePageState extends State<MyHomePage> {
     await _peerConnection!.createOffer({'offerToReceiveVideo': 1, 'offerToReceiveAudio' :1});
     var session = parse(description.sdp.toString());
     print(json.encode(session));
+    socket!.emit('on offer','$session'+' '+'$id'+'$isBlind');
     _offer = true;
 
     // print(json.encode({
@@ -149,6 +250,7 @@ class _MyHomePageState extends State<MyHomePage> {
 
     var session = parse(description.sdp.toString());
     print(json.encode(session));
+    socket!.emit('on answer','$session'+' '+'$id'+'$isBlind');
     // print(json.encode({
     //       'sdp': description.sdp.toString(),
     //       'type': description.type.toString(),
@@ -158,7 +260,20 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   void _setRemoteDescription() async {
-    String jsonString = sdpController.text;
+    String? jsonString;
+    if(isBlind!){
+      socket!.on('getting Second side SDP of Blind', (data) => {
+        jsonString= data,
+      });
+    }
+    else{
+      socket!.on('getting Second side SDP of volunteer', (data) => {
+        jsonString= data,
+      });
+    }
+
+
+    //sdpController.text;
     dynamic session = await jsonDecode('$jsonString');
 
     String sdp = write(session, null);
@@ -173,7 +288,14 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   void _addCandidate() async {
-    String jsonString = sdpController.text;
+    String? jsonString;
+    // TODO: for more than one blind person we need to set id
+    socket!.on('getting ICE from blind', (data) => {
+      jsonString= data,
+    });
+
+
+        //sdpController.text;
     dynamic session = await jsonDecode('$jsonString');
     print(session['candidate']);
     dynamic candidate =
@@ -215,12 +337,19 @@ class _MyHomePageState extends State<MyHomePage> {
           //         );
           //       });
           // },
-          onPressed: _createOffer,
+          onPressed: (){
+            _createOffer();
+            _setRemoteDescription();
+          },
           child: Text('Offer'),
            style: ElevatedButton.styleFrom(primary: Colors.green),
         ),
         ElevatedButton(
-          onPressed: _createAnswer,
+          onPressed: (){
+            _createAnswer();
+            _setRemoteDescription();
+            _addCandidate();
+          },
           child: Text('Answer'),
           style: ElevatedButton.styleFrom(primary: Colors.blue),
         ),

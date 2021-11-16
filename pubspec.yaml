@@ -32,7 +32,7 @@ dependencies:
   hexcolor: ^2.0.5
   permission_handler:
   sdp_transform: ^0.3.2
-  web_socket_channel:
+
   socket_io_client: ^1.0.1
 
 dev_dependencies:
